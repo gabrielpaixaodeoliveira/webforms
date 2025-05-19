@@ -5,43 +5,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head runat="server">
     <title>File Upload and Sign</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-        .message {
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 3px;
-            display: block;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            min-height: 20px;
-            line-height: 1.5;
-        }
-        .success {
-            background-color: #dff0d8;
-            color: #3c763d;
-        }
-        .error {
-            background-color: #f2dede;
-            color: #a94442;
-        }
-        .options {
-            margin: 15px 0;
-        }
-        .certificate-options {
-            margin: 10px 0 10px 25px;
-        }
-    </style>
+    <link href="styles/main.css" rel="stylesheet" type="text/css" />
 </head>
 <body>
     <form id="form1" runat="server" enctype="multipart/form-data">
@@ -49,14 +13,12 @@
             <Scripts>
                 <asp:ScriptReference Path="~/Scripts/jquery-3.1.1.min.js" />
                 <asp:ScriptReference Path="~/Scripts/jquery.blockUI.js" />
-                
+                <asp:ScriptReference Path="~/Scripts/bootstrap.min.js" />
+                <asp:ScriptReference Path="~/Scripts/lacuna-web-pki-2.11.0.js" />
                 <asp:ScriptReference Path="~/Scripts/WebForms/MsAjax/MicrosoftAjax.js" />
                 <asp:ScriptReference Path="~/Scripts/WebForms/MsAjax/MicrosoftAjaxApplicationServices.js" />
                 <asp:ScriptReference Path="~/Scripts/WebForms/MsAjax/MicrosoftAjaxTimer.js" />
                 <asp:ScriptReference Path="~/Scripts/WebForms/MsAjax/MicrosoftAjaxWebForms.js" />
-                
-                <asp:ScriptReference Path="~/Scripts/bootstrap.min.js" />
-                <asp:ScriptReference Path="~/Scripts/lacuna-web-pki-2.11.0.js" />
                 <asp:ScriptReference Path="~/Scripts/App/signature-form.js" />
             </Scripts>
         </asp:ScriptManager>
@@ -64,6 +26,7 @@
         <div class="container">
             <h2>File Upload and Sign</h2>
             
+            <!-- File Upload Section -->
             <asp:UpdatePanel ID="UploadPanel" runat="server" UpdateMode="Conditional">
                 <ContentTemplate>
                     <div>
@@ -72,6 +35,7 @@
                 </ContentTemplate>
             </asp:UpdatePanel>
 
+            <!-- Certificate Selection Section -->
             <asp:UpdatePanel ID="CertificatePanel" runat="server" UpdateMode="Conditional">
                 <ContentTemplate>
                     <div class="options">
@@ -86,6 +50,7 @@
                 </ContentTemplate>
             </asp:UpdatePanel>
 
+            <!-- Signature Completion Section -->
             <asp:UpdatePanel ID="SignaturePanel" runat="server" UpdateMode="Conditional">
                 <ContentTemplate>
                     <div style="margin-top: 10px;">
@@ -110,12 +75,13 @@
     </form>
 
     <script type="text/javascript">
+        // Global variables
         var isSigning = false;
         var pki = null;
 
+        // Initialize the signature form with all required elements
         function initializeSignatureForm() {
             console.log('Initializing signature form');
-            // Initialize the signature form with all required elements
             signatureForm.pageLoad({
                 certificateSelect: $('#certificateSelect'),
                 submitCertificateButton: $('#<%= SubmitCertificateButton.ClientID %>'),
@@ -140,7 +106,11 @@
                 $('#certificateSelect').val(savedThumbprint);
             }
 
-            // Initialize Web PKI if not already initialized
+            initializeWebPKI();
+        }
+
+        // Initialize Web PKI component
+        function initializeWebPKI() {
             if (!pki) {
                 console.log('Initializing Web PKI');
                 pki = new LacunaWebPKI();
@@ -164,17 +134,7 @@
             }
         }
 
-        Sys.Application.add_init(function() {
-            console.log('Sys.Application.add_init called');
-            initializeSignatureForm();
-
-            // Check if we have hash data after postback
-            if ($('#<%= ToSignHashField.ClientID %>').val()) {
-                console.log('ToSignHashField has value, showing complete button');
-                $('#<%= CompleteSignButton.ClientID %>').show();
-            }
-        });
-
+        // Handle certificate submission and signing
         function submitCertificateAndSign() {
             console.log('submitCertificateAndSign called');
             if (isSigning) return false;
@@ -191,6 +151,7 @@
             return false;
         }
 
+        // Generate and submit signature
         function generateAndSubmitSignature() {
             console.log('generateAndSubmitSignature called');
             if (isSigning) return false;
@@ -222,19 +183,7 @@
                 // Check if Web PKI is initialized
                 if (!pki) {
                     console.log('Web PKI not initialized, initializing now');
-                    pki = new LacunaWebPKI();
-                    pki.init({
-                        ready: function() {
-                            console.log('Web PKI initialized, generating signature');
-                            generateSignature();
-                        },
-                        defaultError: function(message, error, origin) {
-                            console.error('Web PKI Error:', message, error, origin);
-                            alert('Error initializing digital signature component: ' + message);
-                            $.unblockUI();
-                            isSigning = false;
-                        }
-                    });
+                    initializeWebPKI();
                 } else {
                     console.log('Web PKI already initialized, generating signature');
                     generateSignature();
@@ -244,6 +193,7 @@
             return false;
         }
 
+        // Generate signature using Web PKI
         function generateSignature() {
             console.log('Generating signature');
             var thumbprint = $('#<%= SelectedCertThumbprintField.ClientID %>').val();
@@ -265,6 +215,18 @@
                 isSigning = false;
             });
         }
+
+        // Initialize the application
+        Sys.Application.add_init(function() {
+            console.log('Sys.Application.add_init called');
+            initializeSignatureForm();
+
+            // Check if we have hash data after postback
+            if ($('#<%= ToSignHashField.ClientID %>').val()) {
+                console.log('ToSignHashField has value, showing complete button');
+                $('#<%= CompleteSignButton.ClientID %>').show();
+            }
+        });
 
         // Handle postback errors
         if (Sys && Sys.WebForms && Sys.WebForms.PageRequestManager) {

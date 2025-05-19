@@ -1,0 +1,41 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+}
+
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 20px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+.message {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 3px;
+    display: block;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    min-height: 20px;
+    line-height: 1.5;
+}
+
+.success {
+    background-color: #dff0d8;
+    color: #3c763d;
+}
+
+.error {
+    background-color: #f2dede;
+    color: #a94442;
+}
+
+.options {
+    margin: 15px 0;
+}
+
+.certificate-options {
+    margin: 10px 0 10px 25px;
+} 
