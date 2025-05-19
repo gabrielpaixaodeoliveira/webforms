@@ -89,3 +89,5 @@ _TeamCity*
 *.bak
 *.backup 
 Uploads/
+Signed/
+Temp/

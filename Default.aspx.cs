@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Web;
 using System.Web.UI;
 using System.Linq;
 using Lacuna.Pki;
@@ -9,11 +10,23 @@ using System.Security.Cryptography.X509Certificates;
 using Lacuna.Pki.Cades;
 using static Lacuna.Pki.Cades.CadesPolicySpec;
 using System.Web.UI.WebControls;
+using System.Text;
 
 namespace WebForms
 {
-    public partial class Default : Page
+    public partial class Default : System.Web.UI.Page
     {
+        private const string UploadedFileSessionKey = "UploadedFile";
+        private const string TransferDataSessionKey = "TransferData";
+
+        // Add field declarations
+        protected HiddenField CertificateField;
+        protected HiddenField ToSignHashField;
+        protected HiddenField DigestAlgorithmField;
+        protected HiddenField SignatureField;
+        protected HiddenField TransferDataFileIdField;
+        protected HiddenField SelectedCertThumbprintField;
+
         protected void Page_Load(object sender, EventArgs e)
         {
             // Carregando licença
@@ -21,124 +34,279 @@ namespace WebForms
 
             if (!IsPostBack)
             {
-                // Create uploads directory if it doesn't exist
-                string uploadsPath = Server.MapPath("~/Uploads");
-                if (!Directory.Exists(uploadsPath))
-                {
-                    Directory.CreateDirectory(uploadsPath);
-                }
+                // Initialize the page
+                lblMessage.Text = "";
 
-                // Load certificates into dropdown
-                LoadCertificates();
+                // Create necessary directories
+                string uploadsPath = Server.MapPath("~/Uploads");
+                string tempPath = Server.MapPath("~/Temp");
+                string signedPath = Server.MapPath("~/Signed");
+
+                if (!Directory.Exists(uploadsPath))
+                    Directory.CreateDirectory(uploadsPath);
+                if (!Directory.Exists(tempPath))
+                    Directory.CreateDirectory(tempPath);
+                if (!Directory.Exists(signedPath))
+                    Directory.CreateDirectory(signedPath);
+            }
+            else
+            {
+                // Restore certificate from session if exists
+                if (Session["SelectedCertificate"] != null)
+                {
+                    CertificateField.Value = Session["SelectedCertificate"].ToString();
+                }
+                if (Session["SelectedCertThumbprint"] != null)
+                {
+                    SelectedCertThumbprintField.Value = Session["SelectedCertThumbprint"].ToString();
+                }
             }
         }
 
-        private void LoadCertificates()
+        protected void SubmitCertificateButton_Click(object sender, EventArgs e)
         {
-            // Clear existing items
-            ddlCertificates.Items.Clear();
-
-            var store = WindowsCertificateStore.LoadPersonalCurrentUser();
-            var certsWithKey = store.GetCertificatesWithKey();
-
-            foreach (var cert in certsWithKey)
+            try
             {
-                if (cert != null)
+                if (string.IsNullOrEmpty(CertificateField.Value))
                 {
-                    var item = new ListItem(
-                        $"{cert.Certificate.SubjectName} (Valid until: {cert.Certificate.ValidityEnd.DateTime.ToShortDateString()})",
-                        cert.Certificate.SerialNumber.ToString()
-                    );
-                    ddlCertificates.Items.Add(item);
+                    lblMessage.Text = "Please select a certificate";
+                    lblMessage.CssClass = "message error";
+                    SignaturePanel.Update();
+                    return;
                 }
-            }
 
-            if (ddlCertificates.Items.Count == 0)
-            {
-                lblMessage.Text = "No valid certificates could be loaded.";
-                lblMessage.CssClass = "message error";
-            }
-            else
-            {
-                lblMessage.Text = $"Loaded {ddlCertificates.Items.Count} certificates successfully.";
-                lblMessage.CssClass = "message success";
-            }
-        }    
+                // Store the certificate in session
+                Session["SelectedCertificate"] = CertificateField.Value;
+                Session["SelectedCertThumbprint"] = SelectedCertThumbprintField.Value;
 
-        protected void btnUpload_Click(object sender, EventArgs e)
-        {
-            if (FileUpload1.HasFile)
-            {
+                // First handle the file upload if there's a file
+                if (FileUpload1.HasFile)
+                {
+                    HttpPostedFile uploadedFile = FileUpload1.PostedFile;
+
+                    // Verify if it's a PDF file
+                    if (!uploadedFile.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase))
+                    {
+                        lblMessage.Text = "Please select only PDF files.";
+                        lblMessage.CssClass = "message error";
+                        return;
+                    }
+
+                    // Save the file to temp directory
+                    string tempPath = Path.Combine(Server.MapPath("~/Temp"), Path.GetRandomFileName());
+                    uploadedFile.SaveAs(tempPath);
+
+                    // Store the file path in session
+                    Session[UploadedFileSessionKey] = tempPath;
+                    Session["FileName"] = uploadedFile.FileName;
+
+                    // Clear any existing session data
+                    Session.Remove(TransferDataSessionKey);
+                    Session.Remove("SignedFilePath");
+                }
+
+                // Get the file path from session
+                string filePath = Session[UploadedFileSessionKey] as string;
+                if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                {
+                    lblMessage.Text = "Please select a file to sign.";
+                    lblMessage.CssClass = "message error";
+                    return;
+                }
+
+                // Validate certificate
+                if (string.IsNullOrEmpty(CertificateField.Value))
+                {
+                    lblMessage.Text = "No certificate was selected. Please select a certificate and try again.";
+                    lblMessage.CssClass = "message error";
+                    return;
+                }
+
                 try
                 {
-                    string fileName = Path.GetFileName(FileUpload1.FileName);
-                    string uploadsPath = Server.MapPath("~/Uploads");
-                    string filePath = Path.Combine(uploadsPath, fileName);
-                    
-                    // Save the uploaded file
-                    FileUpload1.SaveAs(filePath);
+                    // Decode the user's certificate
+                    var cert = PKCertificate.Decode(Convert.FromBase64String(CertificateField.Value));
 
-                        if (string.IsNullOrEmpty(ddlCertificates.SelectedValue))
-                        {
-                            lblMessage.Text = "Please select a certificate to sign the document.";
-                            lblMessage.CssClass = "message error";
-                            return;
-                        }
+                    // Instantiate a PadesSigner class
+                    var padesSigner = new PadesSigner();
 
-                        // Load the PDF file
-                        var pdfBytes = File.ReadAllBytes(filePath);
+                    // Set the PDF to sign
+                    padesSigner.SetPdfToSign(File.ReadAllBytes(filePath));
 
-                        try
-                        {
-                            // Load the selected certificate from Windows store
-                            var store = WindowsCertificateStore.LoadPersonalCurrentUser();
-                            var certsWithKey = store.GetCertificatesWithKey();
-                            var selectedCert = certsWithKey.FirstOrDefault(c => 
-                                c.Certificate.SerialNumber.ToString() == ddlCertificates.SelectedValue);
+                    // Set the signer certificate
+                    padesSigner.SetSigningCertificate(cert);
 
-                            if (selectedCert == null)
-                            {
-                                lblMessage.Text = "Selected certificate not found.";
-                                lblMessage.CssClass = "message error";
-                                return;
-                            }
+                    // Set the signature policy
+                    padesSigner.SetPolicy(getSignaturePolicy());
 
-                            // Configure the signature with policy
-                            var signer = new CadesSigner();
-                            var policy = BrazilCadesPolicyMappers.GetAdrBasica(false);
-                            signer.SetDataToSign(pdfBytes);
-                            signer.SetPolicy(policy);
-                            signer.SetSigningCertificate(selectedCert);
+                    // Set the signature's visual representation
+                    padesSigner.SetVisualRepresentation(getVisualRepresentation(cert));
 
-                            // Compute the signature
-                            signer.ComputeSignature();
-                            var cadesSig = signer.GetSignature();
+                    // Generate the to-sign bytes and transfer data
+                    byte[] toSignBytes = padesSigner.GetToSignBytes(out SignatureAlgorithm signatureAlg, out byte[] transferData);
 
-                            // Save the signed file
-                            string signedFileName = Path.GetFileNameWithoutExtension(fileName) + "_signed.p7s";
-                            string signedFilePath = Path.Combine(uploadsPath, signedFileName);
-                            File.WriteAllBytes(signedFilePath, cadesSig);
+                    // Store the transfer data in session
+                    Session[TransferDataSessionKey] = transferData;
 
-                            lblMessage.Text = $"File signed successfully! Signed file saved as: {signedFileName}";
-                            lblMessage.CssClass = "message success";
-                        }
-                        catch(Exception ex)
-                        {
-                            lblMessage.Text = "Error signing document: " + ex.Message;
-                            lblMessage.CssClass = "message error";
-                        }
+                    // Store the file path in session for the next step
+                    Session["SignedFilePath"] = filePath;
+
+                    // Store the certificate in session for the next step
+                    Session["SelectedCertificate"] = CertificateField.Value;
+
+                    // Set the hash and algorithm for the client
+                    ToSignHashField.Value = Convert.ToBase64String(signatureAlg.DigestAlgorithm.ComputeHash(toSignBytes));
+                    DigestAlgorithmField.Value = signatureAlg.DigestAlgorithm.Oid;
+
+                    // The library will automatically call sign() when these fields are set
+                    lblMessage.Text = "Certificate selected successfully. Please complete the signature.";
+                    lblMessage.CssClass = "message success";
                 }
                 catch (Exception ex)
                 {
-                    lblMessage.Text = "Error: " + ex.Message;
-                    lblMessage.CssClass = "message error";
+                    System.Diagnostics.Debug.WriteLine($"Error processing certificate: {ex}");
+                    throw new Exception("Error processing certificate. Please try again.");
                 }
+
+                // Update the signature panel to show the complete button
+                SignaturePanel.Update();
             }
-            else
+            catch (ValidationException ex)
             {
-                lblMessage.Text = "Please select a file to upload.";
+                lblMessage.Text = string.Join("<br/>", ex.ValidationResults.Errors.Select(ve => ve.ToString()));
                 lblMessage.CssClass = "message error";
+                SignaturePanel.Update();
             }
+            catch (Exception ex)
+            {
+                lblMessage.Text = "Error: " + ex.Message;
+                lblMessage.CssClass = "message error";
+                SignaturePanel.Update();
+            }
+        }
+
+        protected void SubmitSignatureButton_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(SignatureField.Value))
+                {
+                    lblMessage.Text = "Signature is missing";
+                    lblMessage.CssClass = "message error";
+                    SignaturePanel.Update();
+                    return;
+                }
+
+                // Get the transfer data from session
+                var transferData = Session[TransferDataSessionKey] as byte[];
+                if (transferData == null)
+                {
+                    throw new Exception("Transfer data not found. Please try again.");
+                }
+
+                // Get the file path from session
+                string filePath = Session["SignedFilePath"] as string;
+                if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                {
+                    throw new Exception("File not found. Please upload the file again.");
+                }
+
+                // Get the signature from the hidden field
+                string signature = SignatureField.Value;
+                if (string.IsNullOrEmpty(signature))
+                {
+                    throw new Exception("No signature was provided. Please try signing again.");
+                }
+
+                try
+                {
+                    // Create a PadesSigner instance
+                    var padesSigner = new PadesSigner();
+
+                    // Set the signature policy
+                    padesSigner.SetPolicy(getSignaturePolicy());
+
+                    // Set the pre-computed signature
+                    padesSigner.SetPreComputedSignature(Convert.FromBase64String(signature), transferData);
+
+                    // Compute the signature
+                    padesSigner.ComputeSignature();
+
+                    // Get the signed PDF
+                    var signedPdf = padesSigner.GetPadesSignature();
+
+                    // Save the signed PDF
+                    string signedFilePath = Path.Combine(Server.MapPath("~/Signed"), 
+                        Path.GetFileNameWithoutExtension(Session["FileName"] as string) + "_signed.pdf");
+                    File.WriteAllBytes(signedFilePath, signedPdf);
+
+                    // Clean up
+                    File.Delete(filePath);
+                    Session.Remove(TransferDataSessionKey);
+                    Session.Remove("SignedFilePath");
+                    Session.Remove(UploadedFileSessionKey);
+                    Session.Remove("FileName");
+
+                    // Show success message with download link
+                    lblMessage.Text = "File signed successfully! <a href='Signed/" + Path.GetFileName(signedFilePath) + "' target='_blank'>Download signed file</a>";
+                    lblMessage.CssClass = "message success";
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error during signature computation: {ex}");
+                    throw new Exception("Error during signature computation. Please try again.");
+                }
+
+                // Update all panels to show the final state
+                UploadPanel.Update();
+                CertificatePanel.Update();
+                SignaturePanel.Update();
+            }
+            catch (ValidationException ex)
+            {
+                lblMessage.Text = string.Join("<br/>", ex.ValidationResults.Errors.Select(ve => ve.ToString()));
+                lblMessage.CssClass = "message error";
+                SignaturePanel.Update();
+            }
+            catch (Exception ex)
+            {
+                lblMessage.Text = "Error: " + ex.Message;
+                lblMessage.CssClass = "message error";
+                SignaturePanel.Update();
+            }
+        }
+
+        private IPadesPolicyMapper getSignaturePolicy()
+        {
+            return PadesPoliciesForGeneration.GetPadesBasic(Util.GetTrustArbitrator());
+        }
+
+        private PadesVisualRepresentation2 getVisualRepresentation(PKCertificate cert)
+        {
+            var visualRepresentation = new PadesVisualRepresentation2()
+            {
+                Text = new PadesVisualText()
+                {
+                    CustomText = String.Format("Signed by {0}", cert.SubjectName.CommonName),
+                    IncludeSigningTime = true,
+                    HorizontalAlign = PadesTextHorizontalAlign.Left,
+                    Container = new PadesVisualRectangle()
+                    {
+                        Left = 0.2,
+                        Top = 0.2,
+                        Right = 0.2,
+                        Bottom = 0.2
+                    }
+                }
+            };
+
+            var visualPositioning = PadesVisualAutoPositioning.GetFootnote();
+            visualPositioning.Container.Height = 4.94;
+            visualPositioning.SignatureRectangleSize.Width = 8.0;
+            visualPositioning.SignatureRectangleSize.Height = 4.94;
+            visualRepresentation.Position = visualPositioning;
+
+            return visualRepresentation;
         }
 
         protected void btnListCerts_Click(object sender, EventArgs e)
